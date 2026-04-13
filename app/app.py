@@ -36,7 +36,14 @@ if IS_SERVERLESS:
                 with open(schema_path, 'r', encoding='utf-8') as f:
                     conn.executescript(f.read())
                 conn.commit()
+                # Create default admin account
+                admin_email = 'civic.managementsrm@gmail.com'
+                admin_pass = generate_password_hash('Admin@2026')
+                conn.execute('INSERT INTO users (name, email, password, is_admin) VALUES (?, ?, ?, ?)',
+                             ('Civic Management', admin_email, admin_pass, 1))
+                conn.commit()
                 conn.close()
+                print("[INIT] Admin account created: civic.managementsrm@gmail.com")
             except Exception as e:
                 print(f"[DB INIT ERROR] {e}")
 
