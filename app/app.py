@@ -1,4 +1,5 @@
 import os
+import sys
 import sqlite3
 import secrets
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
@@ -15,6 +16,29 @@ IS_SERVERLESS = os.environ.get('VERCEL_ENV') is not None or '/tmp' in os.getcwd(
 
 # Get the directory containing this file for proper path resolution
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Monkey patch sqlite3 for serverless environment (Vercel)
+if IS_SERVERLESS:
+    _original_connect = sqlite3.connect
+    def _patched_connect(path, *args, **kwargs):
+        if path == 'database.db' or path.endswith('database.db'):
+            return _original_connect('/tmp/database.db', *args, **kwargs)
+        return _original_connect(path, *args, **kwargs)
+    sqlite3.connect = _patched_connect
+    # Create tmp directories for uploads
+    os.makedirs('/tmp/uploads', exist_ok=True)
+    # Initialize database in /tmp
+    if not os.path.exists('/tmp/database.db'):
+        schema_path = os.path.join(BASE_DIR, 'schema.sql')
+        if os.path.exists(schema_path):
+            try:
+                conn = sqlite3.connect('/tmp/database.db')
+                with open(schema_path, 'r', encoding='utf-8') as f:
+                    conn.executescript(f.read())
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                print(f"[DB INIT ERROR] {e}")
 
 load_dotenv(override=True)  # Load environment variables from .env file, overriding any existing ones
 
@@ -605,5 +629,14 @@ def analytics():
         'status': {row['status']: row['count'] for row in status_data}
     })
 
-# WSGI entry point for serverless - no app.run() needed
-# For local development, use: flask --app app run
+# Vercel WSGI handler
+class VercelHandler:
+    """WSGI-compatible handler for Vercel serverless functions"""
+    def __init__(self, application):
+        self.application = application
+
+    def __call__(self, environ, start_response):
+        return self.application(environ, start_response)
+
+# Create the handler instance for Vercel
+app = VercelHandler(app)
