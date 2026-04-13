@@ -1,0 +1,115 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div style="max-width: 800px; margin: 0 auto;">
+    <!-- Back Button -->
+    <a href="{{ url_for('index') }}" class="btn btn-outline" style="margin-bottom: 2rem; display: inline-flex; align-items: center; gap: 0.5rem;">
+        <i class='bx bx-left-arrow-alt'></i> Back to Home
+    </a>
+
+    <!-- Main Content Card -->
+    <div class="card" style="padding: 2.5rem;">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1.5rem;">
+            <div>
+                <span class="badge 
+                    {% if complaint.status == 'Pending' %}badge-pending
+                    {% elif complaint.status == 'Accepted' %}badge-resolved
+                    {% else %}badge-rejected{% endif %}" style="font-size: 1rem; padding: 0.4rem 0.8rem; margin-bottom: 1rem; display: inline-block;">
+                    {{ complaint.status }}
+                </span>
+                <h1 style="font-size: 2.5rem; margin-bottom: 0.5rem; color: var(--text-main);">{{ complaint.issue_type }}</h1>
+                <div style="display: flex; align-items: center; gap: 1rem; color: var(--text-muted); font-size: 0.95rem;">
+                    <span><i class='bx bx-time'></i> {{ complaint.date }}</span>
+                    <span><i class='bx bx-user'></i> Reported by <strong>{{ complaint.user_name }}</strong></span>
+                </div>
+            </div>
+            {% if complaint.estimated_completion_date %}
+            <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: var(--radius-md); padding: 1rem 1.5rem; text-align: right;">
+                <span style="display: block; font-size: 0.875rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600; margin-bottom: 0.25rem;">Est. Completion</span>
+                <span style="font-size: 1.25rem; font-weight: 700; color: var(--success);"><i class='bx bx-calendar-check'></i> {{ complaint.estimated_completion_date }}</span>
+            </div>
+            {% endif %}
+        </div>
+
+        {% if complaint.image_path %}
+        <div style="width: 100%; height: 400px; margin-bottom: 2rem; border-radius: var(--radius-lg); overflow: hidden; background: rgba(0,0,0,0.2); border: 1px solid var(--border);">
+            <img src="{{ url_for('static', filename=complaint.image_path) }}" alt="Issue Photo" style="width: 100%; height: 100%; object-fit: contain;">
+        </div>
+        {% endif %}
+
+        <div style="margin-bottom: 2rem;">
+            <h3 style="color: var(--text-main); margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
+                <i class='bx bx-align-left'></i> Description
+            </h3>
+            <p style="font-size: 1.1rem; line-height: 1.6; color: var(--text-main); background: rgba(255,255,255,0.02); padding: 1.5rem; border-radius: var(--radius-md); border: 1px solid var(--border);">
+                {{ complaint.description }}
+            </p>
+        </div>
+
+        {% if complaint.ai_analysis %}
+        <div style="margin-bottom: 2rem; background: rgba(99, 102, 241, 0.1); border: 1px solid rgba(99, 102, 241, 0.3); padding: 1.5rem; border-radius: var(--radius-md);">
+            <h3 style="color: #818cf8; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
+                <i class='bx bx-bot'></i> AI Resolution Estimate
+            </h3>
+            <pre style="font-family: inherit; font-size: 1rem; line-height: 1.6; color: var(--text-main); white-space: pre-wrap; margin: 0;">{{ complaint.ai_analysis }}</pre>
+        </div>
+        {% endif %}
+
+        <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border); padding-top: 2rem;">
+            <div>
+                <h3 style="color: var(--text-main); margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem;">
+                    <i class='bx bx-map-pin' style="color: var(--danger)"></i> Location
+                </h3>
+                <p style="font-size: 1.1rem; color: var(--text-main);">{{ complaint.location }}</p>
+            </div>
+            
+            <div style="text-align: right;">
+                <button onclick="upvote({{ complaint.id }})" class="btn btn-outline" style="padding: 0.75rem 1.5rem; font-size: 1.1rem;" id="upvote-btn-{{ complaint.id }}">
+                    <i class='bx bx-upvote'></i> Upvote (<span id="upvotes-{{ complaint.id }}">{{ complaint.upvotes }}</span>)
+                </button>
+            </div>
+        </div>
+
+        {% if complaint.status == 'Rejected' and complaint.rejection_reason %}
+        <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); color: #FCA5A5; padding: 1.5rem; border-radius: var(--radius-md); font-size: 1rem; margin-top: 2rem; backdrop-filter: blur(4px);">
+            <h4 style="margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem;">
+                <i class='bx bx-error-circle'></i> Reason for rejection
+            </h4>
+            <p>{{ complaint.rejection_reason }}</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+function upvote(id) {
+    if (!{{ 'true' if session.get('user_id') else 'false' }}) {
+        alert("Please log in to upvote issues.");
+        window.location.href = "{{ url_for('login') }}";
+        return;
+    }
+    
+    fetch(`/upvote/${id}`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => {
+        if (!response.ok) throw new Error('Unauthorized');
+        return response.json();
+    })
+    .then(data => {
+        document.getElementById(`upvotes-${id}`).innerText = data.upvotes;
+        const btn = document.getElementById(`upvote-btn-${id}`);
+        btn.style.backgroundColor = 'var(--primary)';
+        btn.style.color = 'white';
+        btn.style.borderColor = 'var(--primary)';
+        btn.innerHTML = `<i class='bx bx-check'></i> Upvoted (${data.upvotes})`;
+    })
+    .catch(error => {
+        console.error('Error:', error);
+    });
+}
+</script>
+{% endblock %}

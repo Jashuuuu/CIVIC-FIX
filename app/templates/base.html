@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CivicFix - Crowdsourced Issue Reporting</title>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <!-- BoxIcons setup for lightweight beautiful icons -->
+    <link href='https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css' rel='stylesheet'>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-container">
+            <a href="{{ url_for('index') }}" class="nav-brand">
+                <i class='bx bx-map-pin bx-md' style="color: var(--primary)"></i> 
+                CivicFix
+            </a>
+            <div class="nav-links">
+                {% if session.get('user_id') %}
+                    <a href="{{ url_for('index') }}" class="nav-link">Home</a>
+                    {% if not session.get('is_admin') %}
+                    <a href="{{ url_for('report_issue') }}" class="btn btn-primary">
+                        <i class='bx bx-plus-circle'></i> Report Issue
+                    </a>
+                    <a href="{{ url_for('my_complaints') }}" class="nav-link">My Reports</a>
+                    {% endif %}
+                    
+                    {% if session.get('is_admin') %}
+                    <a href="{{ url_for('admin_dashboard') }}" class="nav-link" style="color: var(--accent); font-weight: 600;">
+                        <i class='bx bxs-dashboard'></i> Admin
+                    </a>
+                    {% endif %}
+                    
+                    <a href="{{ url_for('logout') }}" class="nav-link"><i class='bx bx-log-out'></i> Logout</a>
+                {% else %}
+                    <a href="{{ url_for('login') }}" class="nav-link">Log In</a>
+                    <a href="{{ url_for('register') }}" class="btn btn-primary">Sign Up</a>
+                {% endif %}
+            </div>
+        </div>
+    </nav>
+
+    <main class="main-container animate-fade-in">
+        <div class="alerts" id="alerts-container">
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ category }}">
+                            {% if category == 'success' %}<i class='bx bx-check-circle bx-sm'></i>
+                            {% elif category == 'error' %}<i class='bx bx-error-circle bx-sm'></i>
+                            {% elif category == 'warning' %}<i class='bx bx-error bx-sm'></i>
+                            {% else %}<i class='bx bx-info-circle bx-sm'></i>{% endif %}
+                            <div>{{ message }}</div>
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+        </div>
+
+        {% block content %}{% endblock %}
+    </main>
+    
+    <script>
+        // Auto-scroll to top when alerts appear
+        document.addEventListener('DOMContentLoaded', function() {
+            const alertsContainer = document.getElementById('alerts-container');
+            const alerts = alertsContainer.querySelectorAll('.alert');
+            
+            if (alerts.length > 0) {
+                // Scroll to top of page to ensure alerts are visible
+                window.scrollTo({ 
+                    top: 0, 
+                    behavior: 'smooth' 
+                });
+                
+                // Add highlight effect with pulse animation
+                alerts.forEach((alert, index) => {
+                    // Staggered animation for multiple alerts
+                    setTimeout(() => {
+                        alert.classList.add('alert-pulse');
+                    }, index * 150);
+                    
+                    // Remove pulse after animation
+                    setTimeout(() => {
+                        alert.classList.remove('alert-pulse');
+                    }, 2000 + (index * 150));
+                });
+            }
+        });
+
+        // Auto-hide alerts after 5 seconds
+        setTimeout(() => {
+            const alerts = document.querySelectorAll('.alert');
+            alerts.forEach(alert => {
+                alert.style.opacity = '0';
+                alert.style.transform = 'translateX(50px) scale(0.9)';
+                setTimeout(() => alert.style.display = 'none', 300);
+            });
+        }, 5000);
+    </script>
+</body>
+</html>

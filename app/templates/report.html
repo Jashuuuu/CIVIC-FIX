@@ -1,0 +1,76 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div style="max-width: 600px; margin: 2rem auto;">
+    <div class="card" style="padding: 2.5rem;">
+        <h2 style="margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem; color: var(--text-main);">
+            <i class='bx bx-edit' style="color: var(--primary)"></i> Report a New Issue
+        </h2>
+        <p style="color: var(--text-muted); margin-bottom: 2rem;">Please provide details and ideally a photo of the civic issue.</p>
+        
+        <form method="POST" enctype="multipart/form-data">
+            <div class="form-group">
+                <label class="form-label" for="issue_type">Issue Category</label>
+                <select id="issue_type" name="issue_type" class="form-control" required style="appearance: none; background: rgba(15, 23, 42, 0.5) url('data:image/svg+xml;utf8,<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\"><path fill=\"%23F8FAFC\" d=\"M7 10l5 5 5-5z\"/></svg>') no-repeat right 10px center; padding-right: 30px;">
+                    <option value="" disabled selected>Select a category...</option>
+                    <option value="Garbage" style="background:#1e293b; color:#fff">Garbage / Waste</option>
+                    <option value="Roads" style="background:#1e293b; color:#fff">Potholes / Roads</option>
+                    <option value="Water" style="background:#1e293b; color:#fff">Water Leakage</option>
+                    <option value="Streetlight" style="background:#1e293b; color:#fff">Streetlight Failure</option>
+                    <option value="Other" style="background:#1e293b; color:#fff">Other Issues</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label" for="location">Exact Location</label>
+                <div style="position: relative;">
+                    <i class='bx bx-map-pin' style="position: absolute; left: 1rem; top: 50%; transform: translateY(-50%); color: var(--text-muted); font-size: 1.25rem;"></i>
+                    <input type="text" id="location" name="location" class="form-control" required placeholder="e.g., 123 Main St crossroad" style="padding-left: 2.75rem;">
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label" for="description">Issue Description</label>
+                <textarea id="description" name="description" class="form-control" rows="5" required placeholder="Describe the severity and exactly where it is..."></textarea>
+            </div>
+            
+            <div class="form-group" style="margin-bottom: 2rem;">
+                <label class="form-label" for="image">Photo Evidence (Optional, max 16MB)</label>
+                <div style="border: 2px dashed rgba(255,255,255,0.2); border-radius: var(--radius-md); padding: 2rem; text-align: center; position: relative; transition: all 0.2s ease; background: rgba(255,255,255,0.02);" id="upload-zone" onmouseover="this.style.borderColor='var(--primary)'; this.style.background='rgba(99, 102, 241, 0.05)';" onmouseout="this.style.borderColor='rgba(255,255,255,0.2)'; this.style.background='rgba(255,255,255,0.02)';">
+                    <i class='bx bx-cloud-upload' style="font-size: 3.5rem; color: var(--primary); margin-bottom: 1rem; text-shadow: 0 0 15px var(--primary-glow);"></i>
+                    <p style="margin-bottom: 0.5rem; color: var(--text-main); font-weight: 500;">Click to upload or drag and drop</p>
+                    <p style="font-size: 0.875rem; color: var(--text-muted);">SVG, PNG, JPG or GIF (max 16MB)</p>
+                    <input type="file" id="image" name="image" accept="image/*" style="opacity: 0; position: absolute; inset: 0; width: 100%; height: 100%; cursor: pointer;">
+                </div>
+                <!-- Preview -->
+                <div id="image-preview" style="margin-top: 1rem; display: none;">
+                    <img id="preview-img" src="" alt="Preview" style="max-width: 100%; border-radius: var(--radius-md); box-shadow: var(--shadow-sm);">
+                </div>
+            </div>
+            
+            <button type="submit" class="btn btn-primary" style="width: 100%; font-size: 1.1rem; padding: 0.875rem;">
+                <i class='bx bx-send'></i> Submit Report
+            </button>
+        </form>
+    </div>
+</div>
+
+<script>
+    const input = document.getElementById('image');
+    const preview = document.getElementById('image-preview');
+    const previewImg = document.getElementById('preview-img');
+    const uploadZone = document.getElementById('upload-zone');
+    
+    input.addEventListener('change', function(e) {
+        if(e.target.files && e.target.files[0]) {
+            const reader = new FileReader();
+            reader.onload = function(x) {
+                previewImg.src = x.target.result;
+                preview.style.display = 'block';
+                uploadZone.style.display = 'none';
+            }
+            reader.readAsDataURL(e.target.files[0]);
+        }
+    });
+</script>
+{% endblock %}

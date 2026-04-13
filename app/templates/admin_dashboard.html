@@ -1,0 +1,224 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div style="margin-bottom: 2rem;">
+    <h1 style="color: var(--text-main); margin-bottom: 0.5rem;">Admin Dashboard</h1>
+    <p style="color: var(--text-muted);">Platform statistics and operations center.</p>
+</div>
+
+<!-- Quick Metric Buttons -->
+<div class="grid grid-cols-2" style="gap: 1.5rem; margin-bottom: 2rem;">
+    <a href="{{ url_for('admin_dashboard', status='Pending') }}" class="card" style="text-decoration: none; text-align: center; display: flex; align-items: center; justify-content: center; flex-direction: column; cursor: pointer; border: 2px solid {% if current_status == 'Pending' %}#f59e0b{% else %}transparent{% endif %}; transition: transform 0.2s;" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='none'">
+        <i class='bx bx-time bx-md' style="color: #f59e0b; margin-bottom: 0.5rem;"></i>
+        <h2 style="font-size: 2.5rem; color: var(--text-main); margin: 0;">{{ pending_count }}</h2>
+        <p style="color: var(--text-muted); font-weight: 600; text-transform: uppercase;">Pending Issues</p>
+    </a>
+    <a href="{{ url_for('admin_dashboard', status='Accepted') }}" class="card" style="text-decoration: none; text-align: center; display: flex; align-items: center; justify-content: center; flex-direction: column; cursor: pointer; border: 2px solid {% if current_status == 'Accepted' %}#10b981{% else %}transparent{% endif %}; transition: transform 0.2s;" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='none'">
+        <i class='bx bx-check-circle bx-md' style="color: #10b981; margin-bottom: 0.5rem;"></i>
+        <h2 style="font-size: 2.5rem; color: var(--text-main); margin: 0;">{{ accepted_count }}</h2>
+        <p style="color: var(--text-muted); font-weight: 600; text-transform: uppercase;">Done / Accepted</p>
+    </a>
+</div>
+
+<!-- Analytics Charts -->
+<div class="grid grid-cols-2" style="margin-bottom: 3rem;">
+    <div class="card">
+        <h3 style="margin-bottom: 1rem;">Issues by Category</h3>
+        <canvas id="categoryChart" height="200"></canvas>
+    </div>
+    <div class="card">
+        <h3 style="margin-bottom: 1rem;">Resolution Status</h3>
+        <canvas id="statusChart" height="200"></canvas>
+    </div>
+</div>
+
+<!-- Filters -->
+<div class="card" style="margin-bottom: 2rem; display: flex; gap: 1rem; align-items: center; background: rgba(255,255,255,0.02); backdrop-filter: var(--glass-blur);">
+    <i class='bx bx-filter-alt bx-sm' style="color: var(--text-muted)"></i>
+    <form style="display: flex; gap: 1rem; flex: 1;" id="filterForm">
+        <select name="type" class="form-control" style="width: auto; flex: 1;" onchange="document.getElementById('filterForm').submit()">
+            <option value="All" {% if current_type == 'All' %}selected{% endif %}>All Issue Types</option>
+            <option value="Garbage" {% if current_type == 'Garbage' %}selected{% endif %}>Garbage</option>
+            <option value="Roads" {% if current_type == 'Roads' %}selected{% endif %}>Roads</option>
+            <option value="Water" {% if current_type == 'Water' %}selected{% endif %}>Water</option>
+            <option value="Streetlight" {% if current_type == 'Streetlight' %}selected{% endif %}>Streetlight</option>
+            <option value="Other" {% if current_type == 'Other' %}selected{% endif %}>Other</option>
+        </select>
+        
+        <select name="status" class="form-control" style="width: auto; flex: 1;" onchange="document.getElementById('filterForm').submit()">
+            <option value="All" {% if current_status == 'All' %}selected{% endif %}>All Statuses</option>
+            <option value="Pending" {% if current_status == 'Pending' %}selected{% endif %}>Pending</option>
+            <option value="Accepted" {% if current_status == 'Accepted' %}selected{% endif %}>Accepted</option>
+            <option value="Rejected" {% if current_status == 'Rejected' %}selected{% endif %}>Rejected</option>
+        </select>
+        
+        <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline">Clear</a>
+    </form>
+</div>
+
+<!-- Data Table -->
+<div class="card" style="padding: 0; overflow: hidden;">
+    <table style="width: 100%; border-collapse: collapse; text-align: left;">
+        <thead>
+            <tr style="background-color: var(--background); border-bottom: 1px solid var(--border);">
+                <th style="padding: 1rem 1.5rem; font-weight: 600; color: var(--text-muted); font-size: 0.875rem; text-transform: uppercase;">ID</th>
+                <th style="padding: 1rem 1.5rem; font-weight: 600; color: var(--text-muted); font-size: 0.875rem; text-transform: uppercase;">User Info</th>
+                <th style="padding: 1rem 1.5rem; font-weight: 600; color: var(--text-muted); font-size: 0.875rem; text-transform: uppercase;">Issue Details</th>
+                <th style="padding: 1rem 1.5rem; font-weight: 600; color: var(--text-muted); font-size: 0.875rem; text-transform: uppercase;">Upvotes</th>
+                <th style="padding: 1rem 1.5rem; font-weight: 600; color: var(--text-muted); font-size: 0.875rem; text-transform: uppercase;">Status / Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for c in complaints %}
+            <tr style="border-bottom: 1px solid var(--border); transition: background-color 0.2s ease;" onmouseover="this.style.backgroundColor='rgba(255,255,255,0.03)'" onmouseout="this.style.backgroundColor='transparent'">
+                <td style="padding: 1rem 1.5rem; font-weight: 500;">
+                    #{{ c.id }}
+                </td>
+                <td style="padding: 1rem 1.5rem;">
+                    <div style="font-weight: 500;">{{ c.user_name }}</div>
+                    <div style="font-size: 0.8rem; color: var(--text-muted);">uid: {{ c.user_id }}</div>
+                </td>
+                <td style="padding: 1rem 1.5rem;">
+                    <div style="display: flex; gap: 1rem; align-items: flex-start;">
+                        {% if c.image_filename %}
+                        <img src="{{ url_for('static', filename='uploads/' + c.image_filename) }}" style="width: 48px; height: 48px; border-radius: 8px; object-fit: cover; border: 1px solid var(--border);" alt="Issue image">
+                        {% else %}
+                        <div style="width: 48px; height: 48px; border-radius: 8px; background: rgba(255,255,255,0.05); border: 1px dashed var(--border); display: flex; align-items: center; justify-content: center; color: var(--text-muted);">
+                            <i class='bx bx-image-alt bx-sm'></i>
+                        </div>
+                        {% endif %}
+                        <div>
+                            <a href="{{ url_for('view_issue', id=c.id) }}" style="font-weight: 600; font-size: 1rem; color: var(--text-main); text-decoration: none; display: flex; align-items: center; gap: 0.35rem; transition: color 0.2s;" onmouseover="this.style.color='var(--primary)'" onmouseout="this.style.color='var(--text-main)'">
+                                {{ c.issue_type }} <i class='bx bx-link-external' style="font-size: 0.9rem; color: var(--text-muted);"></i>
+                            </a>
+                            <span style="font-size: 0.875rem; color: var(--text-muted); display: block; margin-top: 0.35rem;"><i class='bx bx-map'></i> {{ c.location }}</span>
+                            <span style="font-size: 0.8rem; color: var(--text-muted); display: block; margin-top: 0.15rem;"><i class='bx bx-calendar'></i> {{ c.date.split(' ')[0] }}</span>
+                        </div>
+                    </div>
+                </td>
+                <td style="padding: 1rem 1.5rem;">
+                    <span style="background: rgba(79, 70, 229, 0.1); color: var(--primary); padding: 0.25rem 0.75rem; border-radius: 999px; font-weight: 600; font-size: 0.875rem;">
+                        {{ c.upvotes }} <i class='bx bx-upvote'></i>
+                    </span>
+                </td>
+                <td style="padding: 1rem 1.5rem;">
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        {% if c.status == 'Pending' %}
+                        <form action="{{ url_for('update_status', id=c.id) }}" method="POST" style="display: inline-block;">
+                            <input type="hidden" name="status" value="Accepted">
+                            <button type="submit" class="btn btn-primary" style="padding: 0.35rem 0.5rem; font-size: 0.875rem;">Accept</button>
+                        </form>
+                        <button type="button" class="btn btn-danger" style="padding: 0.35rem 0.5rem; font-size: 0.875rem;" onclick="openRejectModal({{ c.id }})">Reject</button>
+                        {% else %}
+                        <span class="badge {% if c.status == 'Accepted' %}badge-resolved{% elif c.status == 'Rejected' %}badge-rejected{% else %}badge-pending{% endif %}">{{ c.status }}</span>
+                        {% endif %}
+                        
+                        <button type="button" class="btn btn-danger" style="padding: 0.35rem 0.5rem;" onclick="openDeleteModal({{ c.id }})">
+                            <i class='bx bx-trash' ></i>
+                        </button>
+                    </div>
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="5" style="padding: 3rem; text-align: center; color: var(--text-muted);">
+                    <i class='bx bx-search-alt-2 bx-lg' style="opacity: 0.5; margin-bottom: 1rem;"></i>
+                    <p>No complaints match your criteria.</p>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<script>
+    // Fetch analytics data and render charts
+    document.addEventListener('DOMContentLoaded', () => {
+        fetch('/api/analytics')
+        .then(response => response.json())
+        .then(data => {
+            const ctxTypes = document.getElementById('categoryChart').getContext('2d');
+            new Chart(ctxTypes, {
+                type: 'doughnut',
+                data: {
+                    labels: Object.keys(data.types),
+                    datasets: [{
+                        data: Object.values(data.types),
+                        backgroundColor: ['#4F46E5', '#10B981', '#F59E0B', '#3b82f6', '#8b5cf6', '#ef4444'],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    cutout: '70%',
+                    plugins: { legend: { position: 'right' } }
+                }
+            });
+
+            const ctxStatus = document.getElementById('statusChart').getContext('2d');
+            new Chart(ctxStatus, {
+                type: 'bar',
+                data: {
+                    labels: Object.keys(data.status),
+                    datasets: [{
+                        label: 'Issues Count',
+                        data: Object.values(data.status),
+                        backgroundColor: ['#f59e0b', '#3b82f6', '#10b981'],
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } },
+                    plugins: { legend: { display: false } }
+                }
+            });
+        });
+    });
+</script>
+<!-- Reject Modal -->
+<div id="rejectModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(4px);">
+    <div class="card" style="width: 100%; max-width: 400px; padding: 2rem;">
+        <h3 style="margin-bottom: 1rem;">Reject Issue</h3>
+        <form id="rejectForm" method="POST">
+            <input type="hidden" name="status" value="Rejected">
+            <div style="margin-bottom: 1.5rem;">
+                <label style="display: block; margin-bottom: 0.5rem; color: var(--text-main); font-weight: 500;">Reason for rejection:</label>
+                <textarea name="rejection_reason" class="form-control" rows="3" required style="width: 100%; border-radius: var(--radius-sm); border: 1px solid var(--border); padding: 0.75rem;"></textarea>
+            </div>
+            <div style="display: flex; gap: 1rem; justify-content: flex-end;">
+                <button type="button" class="btn btn-outline" onclick="closeModal('rejectModal')">Cancel</button>
+                <button type="submit" class="btn btn-danger">Confirm Reject</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Delete Modal -->
+<div id="deleteModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(4px);">
+    <div class="card" style="width: 100%; max-width: 400px; padding: 2rem;">
+        <h3 style="margin-bottom: 1rem;">Delete Issue</h3>
+        <p style="margin-bottom: 1.5rem; color: var(--text-muted);">Are you sure you want to delete this issue? This action cannot be undone.</p>
+        <form id="deleteForm" method="POST">
+            <div style="display: flex; gap: 1rem; justify-content: flex-end;">
+                <button type="button" class="btn btn-outline" onclick="closeModal('deleteModal')">Cancel</button>
+                <button type="submit" class="btn btn-danger">Delete</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+    function openRejectModal(id) {
+        document.getElementById('rejectModal').style.display = 'flex';
+        document.getElementById('rejectForm').action = '/admin/update/' + id;
+    }
+    
+    function openDeleteModal(id) {
+        document.getElementById('deleteModal').style.display = 'flex';
+        document.getElementById('deleteForm').action = '/admin/delete/' + id;
+    }
+    
+    function closeModal(modalId) {
+        document.getElementById(modalId).style.display = 'none';
+    }
+</script>
+{% endblock %}

@@ -1,0 +1,27 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div style="max-width: 400px; margin: 4rem auto;">
+    <div class="card">
+        <h2 style="text-align: center; margin-bottom: 1.5rem; color: var(--text-main);">Verify OTP</h2>
+        <p style="text-align: center; margin-bottom: 1.5rem; color: var(--text-muted);">
+            We have sent a 6-digit OTP to <strong>{{ email }}</strong>. Please enter it below to verify your account.
+        </p>
+        
+        <form method="POST">
+            <div class="form-group">
+                <label class="form-label" for="otp">One-Time Password (OTP)</label>
+                <input type="text" id="otp" name="otp" class="form-control" required placeholder="123456" pattern="\d{6}" title="Please enter the 6 digit OTP">
+            </div>
+            
+            <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 1rem; font-size: 1.1rem; padding: 0.75rem;">
+                Verify OTP
+            </button>
+        </form>
+        
+        <p style="text-align: center; margin-top: 1.5rem; color: var(--text-muted); font-size: 0.95rem;">
+            Didn't receive it? <a href="{{ url_for('forgot_password') }}" style="color: var(--primary); font-weight: 500; text-decoration: none;">Try again</a>
+        </p>
+    </div>
+</div>
+{% endblock %}

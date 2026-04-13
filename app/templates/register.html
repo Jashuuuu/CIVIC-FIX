@@ -1,0 +1,38 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div style="max-width: 440px; margin: 4rem auto;">
+    <div class="card">
+        <div style="text-align: center; margin-bottom: 2rem;">
+            <i class='bx bx-user-plus' style="font-size: 3rem; color: var(--primary)"></i>
+            <h2 style="color: var(--text-main); margin-top: 0.5rem;">Create an Account</h2>
+            <p style="color: var(--text-muted); font-size: 0.95rem;">Join the CivicFix community today.</p>
+        </div>
+        
+        <form method="POST">
+            <div class="form-group">
+                <label class="form-label" for="name">Full Name</label>
+                <input type="text" id="name" name="name" class="form-control" required placeholder="John Doe">
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="email">Email Address</label>
+                <input type="email" id="email" name="email" class="form-control" required placeholder="name@example.com">
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label" for="password">Password</label>
+                <input type="password" id="password" name="password" class="form-control" required placeholder="••••••••">
+            </div>
+            
+            <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 1rem; font-size: 1.1rem; padding: 0.75rem;">
+                Sign Up
+            </button>
+        </form>
+        
+        <p style="text-align: center; margin-top: 1.5rem; color: var(--text-muted); font-size: 0.95rem;">
+            Already have an account? <a href="{{ url_for('login') }}" style="color: var(--primary); font-weight: 500; text-decoration: none;">Log in</a>
+        </p>
+    </div>
+</div>
+{% endblock %}

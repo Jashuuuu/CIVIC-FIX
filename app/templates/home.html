@@ -1,0 +1,122 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<section class="hero">
+    <h1>Report Civic Issues Instantly.</h1>
+    <p>Help us maintain a cleaner, safer, and better city. Spot a pothole? See overflowing garbage? Report it here and track its resolution.</p>
+    {% if not session.get('user_id') %}
+        <a href="{{ url_for('register') }}" class="btn btn-primary" style="font-size: 1.125rem; padding: 0.75rem 1.5rem;">
+            Join the Community
+        </a>
+    {% else %}
+        <a href="{{ url_for('report_issue') }}" class="btn btn-primary" style="font-size: 1.125rem; padding: 0.75rem 1.5rem;">
+            Report an Issue Now
+        </a>
+    {% endif %}
+</section>
+
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+    <h2>Recent Reports in Your Area</h2>
+    <a href="{{ url_for('report_issue') }}" class="btn btn-outline">View Map <i class='bx bx-map'></i></a>
+</div>
+
+<div class="grid grid-cols-3">
+    {% for complaint in complaints %}
+    <div class="card" onclick="window.location.href='{{ url_for('view_issue', id=complaint.id) }}'" style="cursor: pointer;">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem;">
+            <div style="display: flex; flex-direction: column; gap: 0.5rem; align-items: flex-start;">
+                <span class="badge 
+                    {% if complaint.status == 'Pending' %}badge-pending
+                    {% elif complaint.status == 'Accepted' %}badge-resolved
+                    {% else %}badge-rejected{% endif %}">
+                    {{ complaint.status }}
+                </span>
+                {% if complaint.estimated_completion_date %}
+                <span style="font-size: 0.75rem; color: var(--success); font-weight: 600; background: rgba(16, 185, 129, 0.1); padding: 0.2rem 0.5rem; border-radius: var(--radius-sm); border: 1px solid rgba(16,185,129,0.2);"><i class='bx bx-calendar-check'></i> ETA: {{ complaint.estimated_completion_date }}</span>
+                {% endif %}
+            </div>
+            <span style="color: var(--text-muted); font-size: 0.875rem;">
+                <i class='bx bx-time'></i> {{ complaint.date.split(' ')[0] }}
+            </span>
+        </div>
+        
+        <h3 style="margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem;">
+            {% if complaint.issue_type == 'Garbage' %}<i class='bx bx-trash' style="color: var(--accent)"></i>
+            {% elif complaint.issue_type == 'Roads' %}<i class='bx bxs-directions' style="color: var(--primary)"></i>
+            {% elif complaint.issue_type == 'Water' %}<i class='bx bx-water' style="color: #3b82f6"></i>
+            {% elif complaint.issue_type == 'Streetlight' %}<i class='bx bx-bulb' style="color: #eab308"></i>
+            {% else %}<i class='bx bx-error-circle'></i>{% endif %}
+            {{ complaint.issue_type }}
+        </h3>
+        
+        <p style="color: var(--text-muted); margin-bottom: 1rem; font-size: 0.95rem; line-height: 1.4; height: 3rem; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">
+            {{ complaint.description }}
+        </p>
+        
+        {% if complaint.image_path and not session.get('is_admin') %}
+        <div style="height: 120px; margin-bottom: 1rem;">
+            <img src="{{ url_for('static', filename=complaint.image_path) }}" alt="Issue Photo" style="width: 100%; height: 100%; object-fit: cover; border-radius: var(--radius-md);">
+        </div>
+        {% endif %}
+        
+        {% if complaint.status == 'Rejected' and complaint.rejection_reason %}
+        <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); color: #FCA5A5; padding: 0.5rem; border-radius: var(--radius-sm); font-size: 0.8rem; margin-bottom: 1rem; backdrop-filter: blur(4px);">
+            <strong>Reason:</strong> {{ complaint.rejection_reason }}
+        </div>
+        {% endif %}
+        
+        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1.5rem; font-size: 0.875rem; color: var(--text-main);">
+            <i class='bx bx-map-pin' style="color: var(--danger)"></i>
+            {{ complaint.location }}
+        </div>
+
+        <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border); padding-top: 1rem;">
+            <div style="font-size: 0.875rem; color: var(--text-muted);">
+                Reported by <strong>{{ complaint.user_name }}</strong>
+            </div>
+            
+            <button onclick="event.stopPropagation(); upvote({{ complaint.id }})" class="btn btn-outline" style="padding: 0.25rem 0.75rem; font-size: 0.875rem;" id="upvote-btn-{{ complaint.id }}">
+                <i class='bx bx-upvote'></i> <span id="upvotes-{{ complaint.id }}">{{ complaint.upvotes }}</span>
+            </button>
+        </div>
+    </div>
+    {% else %}
+    <div style="grid-column: 1 / -1; text-align: center; padding: 3rem; color: var(--text-muted);">
+        <i class='bx bx-check-shield bx-lg' style="color: var(--secondary); margin-bottom: 1rem;"></i>
+        <h3>No recent issues!</h3>
+        <p>The city is looking great. Be the first to report if you find anything.</p>
+    </div>
+    {% endfor %}
+</div>
+
+<script>
+function upvote(id) {
+    if (!{{ 'true' if session.get('user_id') else 'false' }}) {
+        alert("Please log in to upvote issues.");
+        window.location.href = "{{ url_for('login') }}";
+        return;
+    }
+    
+    fetch(`/upvote/${id}`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => {
+        if (!response.ok) throw new Error('Unauthorized');
+        return response.json();
+    })
+    .then(data => {
+        document.getElementById(`upvotes-${id}`).innerText = data.upvotes;
+        const btn = document.getElementById(`upvote-btn-${id}`);
+        btn.style.backgroundColor = 'var(--primary)';
+        btn.style.color = 'white';
+        btn.style.borderColor = 'var(--primary)';
+    })
+    .catch(error => {
+        console.error('Error:', error);
+    });
+}
+</script>
+{% endblock %}
