@@ -310,50 +310,76 @@ def reset_password():
 # --- User Routes ---
 @app.route('/report', methods=('GET', 'POST'))
 def report_issue():
-    if 'user_id' not in session:
-        flash('Please log in to report an issue.', 'error')
-        return redirect(url_for('login'))
+    try:
+        if 'user_id' not in session:
+            flash('Please log in to report an issue.', 'error')
+            return redirect(url_for('login'))
 
-    if request.method == 'POST':
-        issue_type = request.form['issue_type']
-        description = request.form['description']
-        location = request.form['location']
-        
-        # Handle file upload
-        image_path = None
-        if 'image' in request.files:
-            file = request.files['image']
-            if file and allowed_file(file.filename):
-                filename = secure_filename(file.filename)
-                # Make filename unique
-                unique_filename = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{filename}"
-                file.save(os.path.join(app.config['UPLOAD_FOLDER'], unique_filename))
-                image_path = f"uploads/{unique_filename}"
-        
-        conn = get_db_connection()
-        
-        # Smart Feature: Prevent duplicate complaints
-        duplicate = conn.execute('''
-            SELECT id FROM complaints 
-            WHERE location = ? AND issue_type = ? AND status IN ('Pending', 'Accepted')
-        ''', (location, issue_type)).fetchone()
-        
-        if duplicate:
-            flash('A similar issue is already reported at this location. You can upvote it!', 'warning')
-            conn.close()
-            return redirect(url_for('index'))
-        
-        conn.execute('''
-            INSERT INTO complaints (user_id, issue_type, description, location, image_path)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (session['user_id'], issue_type, description, location, image_path))
-        conn.commit()
-        conn.close()
-        
-        flash('Issue reported successfully!', 'success')
-        return redirect(url_for('my_complaints'))
-        
-    return render_template('report.html')
+        if request.method == 'POST':
+            try:
+                issue_type = request.form.get('issue_type', '')
+                description = request.form.get('description', '')
+                location = request.form.get('location', '')
+                
+                if not issue_type or not description or not location:
+                    flash('Please fill in all required fields.', 'error')
+                    return render_template('report.html')
+                
+            except Exception as e:
+                print(f"[ERROR] Form parsing error: {e}")
+                flash('Invalid form data.', 'error')
+                return render_template('report.html')
+            
+            # Handle file upload
+            image_path = None
+            try:
+                if 'image' in request.files:
+                    file = request.files['image']
+                    if file and allowed_file(file.filename):
+                        filename = secure_filename(file.filename)
+                        # Make filename unique
+                        unique_filename = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{filename}"
+                        save_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
+                        file.save(save_path)
+                        image_path = f"uploads/{unique_filename}"
+                        print(f"[INFO] Image saved: {save_path}")
+            except Exception as e:
+                print(f"[ERROR] File upload error: {e}")
+                flash('Failed to upload image. Continuing without image.', 'warning')
+            
+            try:
+                conn = get_db_connection()
+                
+                # Smart Feature: Prevent duplicate complaints
+                duplicate = conn.execute('''
+                    SELECT id FROM complaints 
+                    WHERE location = ? AND issue_type = ? AND status IN ('Pending', 'Accepted')
+                ''', (location, issue_type)).fetchone()
+                
+                if duplicate:
+                    flash('A similar issue is already reported at this location. You can upvote it!', 'warning')
+                    conn.close()
+                    return redirect(url_for('index'))
+                
+                conn.execute('''
+                    INSERT INTO complaints (user_id, issue_type, description, location, image_path)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (session['user_id'], issue_type, description, location, image_path))
+                conn.commit()
+                conn.close()
+                
+                flash('Issue reported successfully!', 'success')
+                return redirect(url_for('my_complaints'))
+            except Exception as e:
+                print(f"[ERROR] Database error: {e}")
+                flash('Failed to save issue. Please try again.', 'error')
+                return render_template('report.html')
+                
+        return render_template('report.html')
+    except Exception as e:
+        print(f"[ERROR] Unexpected error in /report: {e}")
+        flash('An unexpected error occurred. Please try again.', 'error')
+        return render_template('report.html')
 
 @app.route('/my_complaints')
 def my_complaints():
