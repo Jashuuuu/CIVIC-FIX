@@ -142,11 +142,21 @@ def register():
         if user:
             flash('Email already registered.', 'error')
         else:
-            conn.execute('INSERT INTO users (name, email, password) VALUES (?, ?, ?)',
-                         (name, email, generate_password_hash(password)))
+            # Check if this is the first user - make them admin
+            existing_users = conn.execute('SELECT COUNT(*) as count FROM users').fetchone()
+            is_first_user = existing_users['count'] == 0
+            
+            if is_first_user:
+                conn.execute('INSERT INTO users (name, email, password, is_admin) VALUES (?, ?, ?, ?)',
+                             (name, email, generate_password_hash(password), 1))
+                flash('Registration successful! First user registered as admin.', 'success')
+            else:
+                conn.execute('INSERT INTO users (name, email, password) VALUES (?, ?, ?)',
+                             (name, email, generate_password_hash(password)))
+                flash('Registration successful! Please log in.', 'success')
+            
             conn.commit()
             conn.close()
-            flash('Registration successful! Please log in.', 'success')
             return redirect(url_for('login'))
         conn.close()
     return render_template('register.html')
