@@ -10,15 +10,31 @@ from dotenv import load_dotenv
 import google.generativeai as genai
 import re
 
+# Determine if running in serverless environment
+IS_SERVERLESS = os.environ.get('VERCEL_ENV') is not None or '/tmp' in os.getcwd()
+
+# Get the directory containing this file for proper path resolution
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 load_dotenv(override=True)  # Load environment variables from .env file, overriding any existing ones
 
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-app = Flask(__name__)
-app.secret_key = 'super_secret_civic_key_123'
-app.config['UPLOAD_FOLDER'] = os.path.join('static', 'uploads')
+# Flask app configuration with proper paths for serverless
+template_dir = os.path.join(BASE_DIR, 'templates')
+static_dir = os.path.join(BASE_DIR, 'static')
+
+app = Flask(__name__, template_folder=template_dir, static_folder=static_dir)
+app.secret_key = os.environ.get('SECRET_KEY', 'super_secret_civic_key_123')
+
+# Use /tmp for uploads in serverless environment, otherwise use local static/uploads
+if IS_SERVERLESS:
+    app.config['UPLOAD_FOLDER'] = '/tmp/uploads'
+else:
+    app.config['UPLOAD_FOLDER'] = os.path.join(BASE_DIR, 'static', 'uploads')
+
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB limit
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 
@@ -47,11 +63,19 @@ mail = Mail(app)
 # Ensure upload directory exists
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
+# Ensure static uploads directory exists for local development
+if not IS_SERVERLESS:
+    static_uploads = os.path.join(BASE_DIR, 'static', 'uploads')
+    os.makedirs(static_uploads, exist_ok=True)
+
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def get_db_connection():
-    conn = sqlite3.connect('database.db')
+    """Get database connection - path is handled by monkey patch in serverless"""
+    # In serverless, the path is automatically redirected to /tmp by monkey patch
+    db_path = 'database.db'
+    conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -581,5 +605,5 @@ def analytics():
         'status': {row['status']: row['count'] for row in status_data}
     })
 
-if __name__ == '__main__':
-    app.run(debug=True)
+# WSGI entry point for serverless - no app.run() needed
+# For local development, use: flask --app app run
