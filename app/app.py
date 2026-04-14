@@ -1,6 +1,5 @@
 import os
 import sys
-import sqlite3
 import secrets
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
 from flask_mail import Mail, Message
@@ -10,6 +9,8 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import google.generativeai as genai
 import re
+from pymongo import MongoClient
+from bson import ObjectId
 
 # Determine if running in serverless environment
 IS_SERVERLESS = os.environ.get('VERCEL_ENV') is not None or '/tmp' in os.getcwd()
@@ -17,35 +18,36 @@ IS_SERVERLESS = os.environ.get('VERCEL_ENV') is not None or '/tmp' in os.getcwd(
 # Get the directory containing this file for proper path resolution
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Monkey patch sqlite3 for serverless environment (Vercel)
-if IS_SERVERLESS:
-    _original_connect = sqlite3.connect
-    def _patched_connect(path, *args, **kwargs):
-        if path == 'database.db' or path.endswith('database.db'):
-            return _original_connect('/tmp/database.db', *args, **kwargs)
-        return _original_connect(path, *args, **kwargs)
-    sqlite3.connect = _patched_connect
-    # Create tmp directories for uploads
-    os.makedirs('/tmp/uploads', exist_ok=True)
-    # Initialize database in /tmp
-    if not os.path.exists('/tmp/database.db'):
-        schema_path = os.path.join(BASE_DIR, 'schema.sql')
-        if os.path.exists(schema_path):
-            try:
-                conn = sqlite3.connect('/tmp/database.db')
-                with open(schema_path, 'r', encoding='utf-8') as f:
-                    conn.executescript(f.read())
-                conn.commit()
-                # Create default admin account
-                admin_email = 'civic.managementsrm@gmail.com'
-                admin_pass = generate_password_hash('Admin@2026')
-                conn.execute('INSERT INTO users (name, email, password, is_admin) VALUES (?, ?, ?, ?)',
-                             ('Civic Management', admin_email, admin_pass, 1))
-                conn.commit()
-                conn.close()
-                print("[INIT] Admin account created: civic.managementsrm@gmail.com")
-            except Exception as e:
-                print(f"[DB INIT ERROR] {e}")
+# MongoDB Connection
+MONGO_URI = os.environ.get('MONGO_URI')
+if not MONGO_URI:
+    print("WARNING: MONGO_URI not found in environment variables")
+else:
+    try:
+        client = MongoClient(MONGO_URI)
+        db = client["civicfix"]
+        users_collection = db["users"]
+        reports_collection = db["reports"]
+        print("[INIT] MongoDB connected successfully")
+        
+        # Create default admin account if not exists
+        admin_email = 'civic.managementsrm@gmail.com'
+        existing_admin = users_collection.find_one({"email": admin_email})
+        if not existing_admin:
+            admin_pass = generate_password_hash('Admin@2026')
+            users_collection.insert_one({
+                "name": "Civic Management",
+                "email": admin_email,
+                "password": admin_pass,
+                "is_admin": True
+            })
+            print("[INIT] Admin account created: civic.managementsrm@gmail.com")
+    except Exception as e:
+        print(f"[ERROR] MongoDB connection failed: {e}")
+        client = None
+        db = None
+        users_collection = None
+        reports_collection = None
 
 load_dotenv(override=True)  # Load environment variables from .env file, overriding any existing ones
 
@@ -102,14 +104,6 @@ if not IS_SERVERLESS:
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def get_db_connection():
-    """Get database connection - path is handled by monkey patch in serverless"""
-    # In serverless, the path is automatically redirected to /tmp by monkey patch
-    db_path = 'database.db'
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    return conn
-
 @app.before_request
 def require_login():
     allowed_endpoints = ['login', 'register', 'forgot_password', 'verify_otp', 'reset_password', 'static', 'api_send_otp', 'api_verify_otp', 'api_reset_password']
@@ -124,15 +118,18 @@ def require_login():
 @app.route('/')
 @app.route('/index')
 def index():
-    conn = get_db_connection()
+    if not reports_collection:
+        flash('Database not connected.', 'error')
+        return render_template('home.html', complaints=[])
+    
     # Fetch some recent complaints for the homepage
-    complaints = conn.execute('''
-        SELECT c.*, u.name as user_name 
-        FROM complaints c 
-        JOIN users u ON c.user_id = u.id 
-        ORDER BY c.date DESC LIMIT 6
-    ''').fetchall()
-    conn.close()
+    complaints = list(reports_collection.find().sort("date", -1).limit(6))
+    
+    # Add user_name to each complaint
+    for complaint in complaints:
+        user = users_collection.find_one({"_id": ObjectId(complaint['user_id'])})
+        complaint['user_name'] = user['name'] if user else 'Unknown'
+    
     return render_template('home.html', complaints=complaints)
 
 # --- Authentication Routes ---
@@ -148,32 +145,40 @@ def register():
                 flash('Please fill in all fields.', 'error')
                 return render_template('register.html')
             
-            conn = get_db_connection()
-            user = conn.execute('SELECT id FROM users WHERE email = ?', (email,)).fetchone()
+            if not users_collection:
+                flash('Database not connected.', 'error')
+                return render_template('register.html')
+            
+            user = users_collection.find_one({"email": email})
             
             if user:
                 flash('Email already registered.', 'error')
             else:
                 # Check if this is the first user - make them admin
-                existing_users = conn.execute('SELECT COUNT(*) as count FROM users').fetchone()
-                is_first_user = existing_users['count'] == 0
+                user_count = users_collection.count_documents({})
+                is_first_user = user_count == 0
                 
                 hashed_password = generate_password_hash(password)
                 print(f"[REGISTER] Creating user: {email}, is_admin: {is_first_user}")
                 
                 if is_first_user:
-                    conn.execute('INSERT INTO users (name, email, password, is_admin) VALUES (?, ?, ?, ?)',
-                                 (name, email, hashed_password, 1))
+                    users_collection.insert_one({
+                        "name": name,
+                        "email": email,
+                        "password": hashed_password,
+                        "is_admin": True
+                    })
                     flash('Registration successful! First user registered as admin.', 'success')
                 else:
-                    conn.execute('INSERT INTO users (name, email, password) VALUES (?, ?, ?)',
-                                 (name, email, hashed_password))
+                    users_collection.insert_one({
+                        "name": name,
+                        "email": email,
+                        "password": hashed_password,
+                        "is_admin": False
+                    })
                     flash('Registration successful! Please log in.', 'success')
                 
-                conn.commit()
-                conn.close()
                 return redirect(url_for('login'))
-            conn.close()
         except Exception as e:
             print(f"[ERROR] Registration error: {e}")
             flash('Registration failed. Please try again.', 'error')
@@ -190,11 +195,13 @@ def login():
                 flash('Please fill in all fields.', 'error')
                 return render_template('login.html')
             
+            if not users_collection:
+                flash('Database not connected.', 'error')
+                return render_template('login.html')
+            
             print(f"[LOGIN] Attempting login for: {email}")
             
-            conn = get_db_connection()
-            user = conn.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone()
-            conn.close()
+            user = users_collection.find_one({"email": email})
             
             if not user:
                 print(f"[LOGIN] User not found: {email}")
@@ -202,12 +209,12 @@ def login():
                 return render_template('login.html')
             
             if check_password_hash(user['password'], password):
-                session['user_id'] = user['id']
+                session['user_id'] = str(user['_id'])
                 session['user_name'] = user['name']
-                session['is_admin'] = user['is_admin']
-                print(f"[LOGIN] Success: {email}, is_admin: {user['is_admin']}")
+                session['is_admin'] = user.get('is_admin', False)
+                print(f"[LOGIN] Success: {email}, is_admin: {user.get('is_admin', False)}")
                 flash('Logged in successfully!', 'success')
-                if user['is_admin']:
+                if user.get('is_admin', False):
                     return redirect(url_for('admin_dashboard'))
                 return redirect(url_for('index'))
             else:
@@ -228,23 +235,24 @@ def logout():
 @app.route('/forgot_password', methods=('GET', 'POST'))
 def forgot_password():
     if request.method == 'POST':
-        email = request.form['email']
+        email = request.form.get('email', '').lower().strip()
         
-        conn = get_db_connection()
-        user = conn.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone()
-        conn.close()
+        if not users_collection:
+            flash('Database not connected.', 'error')
+            return render_template('forgot_password.html')
+        
+        user = users_collection.find_one({"email": email})
         
         if user:
             # Generate 6-digit OTP
             otp = f"{secrets.randbelow(1000000):06d}"
-            expiry_time = (datetime.now() + timedelta(minutes=15)).strftime('%Y-%m-%d %H:%M:%S')  # OTP valid for 15 mins
+            expiry_time = datetime.now() + timedelta(minutes=15)
             
-            # Store OTP in database (reusing reset_token column)
-            conn = get_db_connection()
-            conn.execute('UPDATE users SET reset_token = ?, reset_token_expiry = ? WHERE id = ?', 
-                        (otp, expiry_time, user['id']))
-            conn.commit()
-            conn.close()
+            # Store OTP in database
+            users_collection.update_one(
+                {"_id": user['_id']},
+                {"$set": {"reset_token": otp, "reset_token_expiry": expiry_time}}
+            )
             
             try:
                 # Send OTP email
@@ -283,13 +291,18 @@ def verify_otp():
         return redirect(url_for('forgot_password'))
 
     if request.method == 'POST':
-        otp = request.form['otp']
+        otp = request.form.get('otp', '')
         
-        conn = get_db_connection()
-        current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        user = conn.execute('SELECT * FROM users WHERE email = ? AND reset_token = ? AND reset_token_expiry > ?', 
-                          (email, otp, current_time)).fetchone()
-        conn.close()
+        if not users_collection:
+            flash('Database not connected.', 'error')
+            return render_template('verify_otp.html', email=email)
+        
+        current_time = datetime.now()
+        user = users_collection.find_one({
+            "email": email,
+            "reset_token": otp,
+            "reset_token_expiry": {"$gt": current_time}
+        })
         
         if user:
             session['reset_auth'] = True
@@ -309,8 +322,8 @@ def reset_password():
     email = session.get('otp_email')
     
     if request.method == 'POST':
-        password = request.form['password']
-        confirm_password = request.form['confirm_password']
+        password = request.form.get('password', '')
+        confirm_password = request.form.get('confirm_password', '')
         
         if password != confirm_password:
             flash('Passwords do not match.', 'error')
@@ -320,12 +333,15 @@ def reset_password():
             flash('Password must be at least 6 characters long.', 'error')
             return render_template('reset_password.html')
         
+        if not users_collection:
+            flash('Database not connected.', 'error')
+            return render_template('reset_password.html')
+        
         # Update password and clear reset token/session
-        conn = get_db_connection()
-        conn.execute('UPDATE users SET password = ?, reset_token = NULL, reset_token_expiry = NULL WHERE email = ?', 
-                    (generate_password_hash(password), email))
-        conn.commit()
-        conn.close()
+        users_collection.update_one(
+            {"email": email},
+            {"$set": {"password": generate_password_hash(password), "reset_token": None, "reset_token_expiry": None}}
+        )
         
         session.pop('reset_auth', None)
         session.pop('otp_email', None)
@@ -376,25 +392,34 @@ def report_issue():
                 flash('Failed to upload image. Continuing without image.', 'warning')
             
             try:
-                conn = get_db_connection()
+                if not reports_collection:
+                    flash('Database not connected.', 'error')
+                    return render_template('report.html')
                 
                 # Smart Feature: Prevent duplicate complaints
-                duplicate = conn.execute('''
-                    SELECT id FROM complaints 
-                    WHERE location = ? AND issue_type = ? AND status IN ('Pending', 'Accepted')
-                ''', (location, issue_type)).fetchone()
+                duplicate = reports_collection.find_one({
+                    "location": location,
+                    "issue_type": issue_type,
+                    "status": {"$in": ["Pending", "Accepted"]}
+                })
                 
                 if duplicate:
                     flash('A similar issue is already reported at this location. You can upvote it!', 'warning')
-                    conn.close()
                     return redirect(url_for('index'))
                 
-                conn.execute('''
-                    INSERT INTO complaints (user_id, issue_type, description, location, image_path)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (session['user_id'], issue_type, description, location, image_path))
-                conn.commit()
-                conn.close()
+                reports_collection.insert_one({
+                    "user_id": session['user_id'],
+                    "issue_type": issue_type,
+                    "description": description,
+                    "location": location,
+                    "image_path": image_path,
+                    "status": "Pending",
+                    "date": datetime.now(),
+                    "upvotes": 0,
+                    "rejection_reason": None,
+                    "estimated_completion_date": None,
+                    "ai_analysis": None
+                })
                 
                 flash('Issue reported successfully!', 'success')
                 return redirect(url_for('my_complaints'))
@@ -413,46 +438,54 @@ def report_issue():
 def my_complaints():
     if 'user_id' not in session:
         return redirect(url_for('login'))
+    
+    if not reports_collection:
+        flash('Database not connected.', 'error')
+        return render_template('my_complaints.html', complaints=[])
         
-    conn = get_db_connection()
-    complaints = conn.execute('''
-        SELECT * FROM complaints WHERE user_id = ? ORDER BY date DESC
-    ''', (session['user_id'],)).fetchall()
-    conn.close()
+    complaints = list(reports_collection.find({"user_id": session['user_id']}).sort("date", -1))
     
     return render_template('my_complaints.html', complaints=complaints)
 
-@app.route('/issue/<int:id>')
+@app.route('/issue/<id>')
 def view_issue(id):
-    conn = get_db_connection()
-    complaint = conn.execute('''
-        SELECT c.*, u.name as user_name 
-        FROM complaints c 
-        JOIN users u ON c.user_id = u.id 
-        WHERE c.id = ?
-    ''', (id,)).fetchone()
-    conn.close()
+    if not reports_collection or not users_collection:
+        flash('Database not connected.', 'error')
+        return redirect(url_for('index'))
+    
+    try:
+        complaint = reports_collection.find_one({"_id": ObjectId(id)})
+    except:
+        flash('Invalid issue ID.', 'error')
+        return redirect(url_for('index'))
     
     if not complaint:
         flash('Issue not found.', 'error')
         return redirect(url_for('index'))
-        
+    
+    # Get user name
+    user = users_collection.find_one({"_id": ObjectId(complaint['user_id'])})
+    complaint['user_name'] = user['name'] if user else 'Unknown'
+    
     return render_template('issue_detail.html', complaint=complaint)
 
-@app.route('/upvote/<int:id>', methods=['POST'])
+@app.route('/upvote/<id>', methods=['POST'])
 def upvote(id):
     if 'user_id' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
     
-    conn = get_db_connection()
-    # Simple upvote increment. For a real app, track user upvotes to prevent multiple per user.
-    conn.execute('UPDATE complaints SET upvotes = upvotes + 1 WHERE id = ?', (id,))
-    conn.commit()
+    if not reports_collection:
+        return jsonify({'error': 'Database not connected'}), 500
     
-    new_upvotes = conn.execute('SELECT upvotes FROM complaints WHERE id = ?', (id,)).fetchone()
-    conn.close()
-    
-    return jsonify({'upvotes': new_upvotes['upvotes']})
+    try:
+        reports_collection.update_one(
+            {"_id": ObjectId(id)},
+            {"$inc": {"upvotes": 1}}
+        )
+        complaint = reports_collection.find_one({"_id": ObjectId(id)})
+        return jsonify({'upvotes': complaint['upvotes']})
+    except:
+        return jsonify({'error': 'Invalid issue ID'}), 400
 
 # --- Admin Routes ---
 @app.route('/admin')
@@ -460,27 +493,32 @@ def admin_dashboard():
     if not session.get('is_admin'):
         flash('Unauthorized access.', 'error')
         return redirect(url_for('index'))
+    
+    if not reports_collection or not users_collection:
+        flash('Database not connected.', 'error')
+        return render_template('admin_dashboard.html', complaints=[],
+                               current_status='All', current_type='All',
+                               pending_count=0, accepted_count=0)
         
     status_filter = request.args.get('status', 'All')
     type_filter = request.args.get('type', 'All')
     
-    query = 'SELECT c.*, u.name as user_name FROM complaints c JOIN users u ON c.user_id = u.id WHERE 1=1'
-    params = []
-    
+    # Build query
+    query = {}
     if status_filter != 'All':
-        query += ' AND c.status = ?'
-        params.append(status_filter)
+        query['status'] = status_filter
     if type_filter != 'All':
-        query += ' AND c.issue_type = ?'
-        params.append(type_filter)
+        query['issue_type'] = type_filter
         
-    query += ' ORDER BY c.date DESC'
-        
-    conn = get_db_connection()
-    complaints = conn.execute(query, params).fetchall()
-    pending_count = conn.execute("SELECT COUNT(*) FROM complaints WHERE status = 'Pending'").fetchone()[0]
-    accepted_count = conn.execute("SELECT COUNT(*) FROM complaints WHERE status = 'Accepted'").fetchone()[0]
-    conn.close()
+    complaints = list(reports_collection.find(query).sort("date", -1))
+    
+    # Add user_name to each complaint
+    for complaint in complaints:
+        user = users_collection.find_one({"_id": ObjectId(complaint['user_id'])})
+        complaint['user_name'] = user['name'] if user else 'Unknown'
+    
+    pending_count = reports_collection.count_documents({"status": "Pending"})
+    accepted_count = reports_collection.count_documents({"status": "Accepted"})
     
     return render_template('admin_dashboard.html', complaints=complaints, 
                            current_status=status_filter, current_type=type_filter,
@@ -539,52 +577,75 @@ Complaint: "{description}"
         print("Gemini API Error:", e)
         return "Error calling AI.", 4
 
-@app.route('/admin/update/<int:id>', methods=['POST'])
+@app.route('/admin/update/<id>', methods=['POST'])
 def update_status(id):
     if not session.get('is_admin'):
         return redirect(url_for('index'))
+    
+    if not reports_collection:
+        flash('Database not connected.', 'error')
+        return redirect(url_for('admin_dashboard'))
         
     new_status = request.form.get('status')
     rejection_reason = request.form.get('rejection_reason')
     
     if new_status in ['Pending', 'Accepted', 'Rejected']:
-        conn = get_db_connection()
-        
-        if new_status == 'Accepted':
-            row = conn.execute('SELECT issue_type, description FROM complaints WHERE id = ?', (id,)).fetchone()
-            issue_type = row['issue_type']
-            description = row['description']
+        try:
+            if new_status == 'Accepted':
+                complaint = reports_collection.find_one({"_id": ObjectId(id)})
+                if complaint:
+                    issue_type = complaint['issue_type']
+                    description = complaint['description']
+                    
+                    ai_text, eta_days = analyze_complaint_eta(description, issue_type)
+                    
+                    if not ai_text or ai_text == "API Key not configured":
+                        eta_days = {'Garbage': 1, 'Water': 2, 'Streetlight': 3, 'Roads': 5}.get(issue_type, 4)
+                        ai_text = f"* Issue Type: {issue_type}\\n* Severity: Unknown\\n* Estimated Resolution Time: Default\\n* Reason: AI API Key not configured."
+                    
+                    estimated_date = datetime.now() + timedelta(days=eta_days)
+                    reports_collection.update_one(
+                        {"_id": ObjectId(id)},
+                        {"$set": {
+                            "status": new_status,
+                            "rejection_reason": rejection_reason,
+                            "estimated_completion_date": estimated_date,
+                            "ai_analysis": ai_text
+                        }}
+                    )
+            else:
+                # Clear ETA if rejected or pending
+                reports_collection.update_one(
+                    {"_id": ObjectId(id)},
+                    {"$set": {
+                        "status": new_status,
+                        "rejection_reason": rejection_reason,
+                        "estimated_completion_date": None,
+                        "ai_analysis": None
+                    }}
+                )
             
-            ai_text, eta_days = analyze_complaint_eta(description, issue_type)
-            
-            if not ai_text or ai_text == "API Key not configured":
-                eta_days = {'Garbage': 1, 'Water': 2, 'Streetlight': 3, 'Roads': 5}.get(issue_type, 4)
-                ai_text = f"* Issue Type: {issue_type}\\n* Severity: Unknown\\n* Estimated Resolution Time: Default\\n* Reason: AI API Key not configured."
-                
-            estimated_date = (datetime.now() + timedelta(days=eta_days)).strftime('%Y-%m-%d')
-            conn.execute('UPDATE complaints SET status = ?, rejection_reason = ?, estimated_completion_date = ?, ai_analysis = ? WHERE id = ?', 
-                         (new_status, rejection_reason, estimated_date, ai_text, id))
-        else:
-            # Clear ETA if rejected
-            conn.execute('UPDATE complaints SET status = ?, rejection_reason = ?, estimated_completion_date = NULL, ai_analysis = NULL WHERE id = ?', 
-                         (new_status, rejection_reason, id))
-                         
-        conn.commit()
-        conn.close()
-        flash('Status updated successfully.', 'success')
+            flash('Status updated successfully.', 'success')
+        except:
+            flash('Invalid complaint ID.', 'error')
         
     return redirect(url_for('admin_dashboard'))
 
-@app.route('/admin/delete/<int:id>', methods=['POST'])
+@app.route('/admin/delete/<id>', methods=['POST'])
 def delete_complaint(id):
     if not session.get('is_admin'):
         return redirect(url_for('index'))
+    
+    if not reports_collection:
+        flash('Database not connected.', 'error')
+        return redirect(url_for('admin_dashboard'))
         
-    conn = get_db_connection()
-    conn.execute('DELETE FROM complaints WHERE id = ?', (id,))
-    conn.commit()
-    conn.close()
-    flash('Complaint deleted.', 'success')
+    try:
+        reports_collection.delete_one({"_id": ObjectId(id)})
+        flash('Complaint deleted.', 'success')
+    except:
+        flash('Invalid complaint ID.', 'error')
+    
     return redirect(url_for('admin_dashboard'))
 
 @app.route('/api/send-otp', methods=['POST'])
@@ -593,20 +654,21 @@ def api_send_otp():
     if not data or not data.get('email'):
         return jsonify({'error': 'Email is required'}), 400
     
-    email = data['email']
-    conn = get_db_connection()
-    user = conn.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone()
-    conn.close()
+    email = data['email'].lower().strip()
+    
+    if not users_collection:
+        return jsonify({'error': 'Database not connected'}), 500
+    
+    user = users_collection.find_one({"email": email})
     
     if user:
         otp = f"{secrets.randbelow(1000000):06d}"
-        expiry_time = (datetime.now() + timedelta(minutes=5)).strftime('%Y-%m-%d %H:%M:%S')
+        expiry_time = datetime.now() + timedelta(minutes=5)
         
-        conn = get_db_connection()
-        conn.execute('UPDATE users SET reset_token = ?, reset_token_expiry = ? WHERE id = ?', 
-                    (otp, expiry_time, user['id']))
-        conn.commit()
-        conn.close()
+        users_collection.update_one(
+            {"_id": user['_id']},
+            {"$set": {"reset_token": otp, "reset_token_expiry": expiry_time}}
+        )
         
         try:
             msg = Message(
@@ -629,27 +691,30 @@ def api_verify_otp():
     if not data:
         return jsonify({'error': 'Invalid JSON'}), 400
     
-    email = data.get('email')
+    email = data.get('email', '').lower().strip()
     otp = data.get('otp')
     
     if not email or not otp:
         return jsonify({'error': 'Email and OTP are required'}), 400
+    
+    if not users_collection:
+        return jsonify({'error': 'Database not connected'}), 500
         
-    conn = get_db_connection()
-    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    user = conn.execute('SELECT * FROM users WHERE email = ? AND reset_token = ? AND reset_token_expiry > ?', 
-                      (email, otp, current_time)).fetchone()
-    conn.close()
+    current_time = datetime.now()
+    user = users_collection.find_one({
+        "email": email,
+        "reset_token": otp,
+        "reset_token_expiry": {"$gt": current_time}
+    })
     
     if user:
         # Generate a temporary auth token tied to the DB for resetting pass
         reset_auth_token = secrets.token_hex(32)
-        expiry_time = (datetime.now() + timedelta(minutes=15)).strftime('%Y-%m-%d %H:%M:%S')
-        conn = get_db_connection()
-        conn.execute('UPDATE users SET reset_token = ?, reset_token_expiry = ? WHERE id = ?', 
-                    (reset_auth_token, expiry_time, user['id']))
-        conn.commit()
-        conn.close()
+        expiry_time = datetime.now() + timedelta(minutes=15)
+        users_collection.update_one(
+            {"_id": user['_id']},
+            {"$set": {"reset_token": reset_auth_token, "reset_token_expiry": expiry_time}}
+        )
         return jsonify({'message': 'OTP verified successfully.', 'reset_auth_token': reset_auth_token}), 200
     
     return jsonify({'error': 'Invalid or expired OTP'}), 401
@@ -660,7 +725,7 @@ def api_reset_password():
     if not data:
         return jsonify({'error': 'Invalid JSON'}), 400
         
-    email = data.get('email')
+    email = data.get('email', '').lower().strip()
     reset_auth_token = data.get('reset_auth_token')
     new_password = data.get('new_password')
     
@@ -669,35 +734,44 @@ def api_reset_password():
     
     if len(new_password) < 6:
         return jsonify({'error': 'Password must be at least 6 characters long.'}), 400
+    
+    if not users_collection:
+        return jsonify({'error': 'Database not connected'}), 500
         
-    conn = get_db_connection()
-    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    user = conn.execute('SELECT * FROM users WHERE email = ? AND reset_token = ? AND reset_token_expiry > ?', 
-                      (email, reset_auth_token, current_time)).fetchone()
+    current_time = datetime.now()
+    user = users_collection.find_one({
+        "email": email,
+        "reset_token": reset_auth_token,
+        "reset_token_expiry": {"$gt": current_time}
+    })
                       
     if user:
-        conn.execute('UPDATE users SET password = ?, reset_token = NULL, reset_token_expiry = NULL WHERE id = ?', 
-                    (generate_password_hash(new_password), user['id']))
-        conn.commit()
-        conn.close()
+        users_collection.update_one(
+            {"_id": user['_id']},
+            {"$set": {"password": generate_password_hash(new_password), "reset_token": None, "reset_token_expiry": None}}
+        )
         return jsonify({'message': 'Password reset successfully.'}), 200
         
-    conn.close()
     return jsonify({'error': 'Unauthorized or expired token.'}), 401
 
 @app.route('/api/analytics')
 def analytics():
     if not session.get('is_admin'):
         return jsonify({'error': 'Unauthorized'}), 401
+    
+    if not reports_collection:
+        return jsonify({'error': 'Database not connected'}), 500
         
-    conn = get_db_connection()
-    types_data = conn.execute('SELECT issue_type, COUNT(*) as count FROM complaints GROUP BY issue_type').fetchall()
-    status_data = conn.execute('SELECT status, COUNT(*) as count FROM complaints GROUP BY status').fetchall()
-    conn.close()
+    types_data = list(reports_collection.aggregate([
+        {"$group": {"_id": "$issue_type", "count": {"$sum": 1}}}
+    ]))
+    status_data = list(reports_collection.aggregate([
+        {"$group": {"_id": "$status", "count": {"$sum": 1}}}
+    ]))
     
     return jsonify({
-        'types': {row['issue_type']: row['count'] for row in types_data},
-        'status': {row['status']: row['count'] for row in status_data}
+        'types': {item['_id']: item['count'] for item in types_data},
+        'status': {item['_id']: item['count'] for item in status_data}
     })
 
 # Vercel WSGI handler
