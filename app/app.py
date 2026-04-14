@@ -11,6 +11,7 @@ import google.generativeai as genai
 import re
 from pymongo import MongoClient
 from bson import ObjectId
+from supabase import create_client, Client
 
 # Determine if running in serverless environment
 IS_SERVERLESS = os.environ.get('VERCEL_ENV') is not None or '/tmp' in os.getcwd()
@@ -18,7 +19,7 @@ IS_SERVERLESS = os.environ.get('VERCEL_ENV') is not None or '/tmp' in os.getcwd(
 # Get the directory containing this file for proper path resolution
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# MongoDB Connection
+# MongoDB Connection (for reports data and user metadata only, not auth)
 MONGO_URI = os.environ.get('MONGO_URI')
 if not MONGO_URI:
     print("WARNING: MONGO_URI not found in environment variables")
@@ -26,28 +27,43 @@ else:
     try:
         client = MongoClient(MONGO_URI)
         db = client["civicfix"]
-        users_collection = db["users"]
+        users_collection = db["users"]  # For user metadata only
         reports_collection = db["reports"]
         print("[INIT] MongoDB connected successfully")
         
-        # Create default admin account if not exists
+        # Create default admin metadata if not exists
         admin_email = 'civic.managementsrm@gmail.com'
         existing_admin = users_collection.find_one({"email": admin_email})
         if not existing_admin:
-            admin_pass = generate_password_hash('Admin@2026')
             users_collection.insert_one({
                 "name": "Civic Management",
                 "email": admin_email,
-                "password": admin_pass,
-                "is_admin": True
+                "is_admin": True,
+                "created_at": datetime.now()
             })
-            print("[INIT] Admin account created: civic.managementsrm@gmail.com")
+            print(f"[INIT] Admin metadata created: {admin_email}")
+            print(f"[NOTE] Please create this user in Supabase Auth with email: {admin_email}")
     except Exception as e:
         print(f"[ERROR] MongoDB connection failed: {e}")
         client = None
         db = None
         users_collection = None
         reports_collection = None
+
+# Supabase Auth Connection
+SUPABASE_URL = os.environ.get('SUPABASE_URL')
+SUPABASE_KEY = os.environ.get('SUPABASE_KEY')
+supabase: Client = None
+
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        print("[INIT] Supabase connected successfully")
+    except Exception as e:
+        print(f"[ERROR] Supabase connection failed: {e}")
+        supabase = None
+else:
+    print("WARNING: SUPABASE_URL or SUPABASE_KEY not found in environment variables")
 
 load_dotenv(override=True)  # Load environment variables from .env file, overriding any existing ones
 
@@ -104,9 +120,87 @@ if not IS_SERVERLESS:
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+# Supabase Auth Functions
+def signup(email, password, name=None):
+    """Sign up user using Supabase Auth"""
+    if not supabase:
+        return {"error": "Supabase not connected"}, 500
+    
+    try:
+        # Sign up with Supabase
+        auth_response = supabase.auth.sign_up({
+            "email": email,
+            "password": password,
+            "options": {
+                "data": {
+                    "name": name if name else email.split('@')[0]
+                }
+            }
+        })
+        
+        print(f"[SUPABASE SIGNUP] Response: {auth_response}")
+        
+        if auth_response.user:
+            # Store user metadata in MongoDB (without password)
+            if users_collection:
+                users_collection.update_one(
+                    {"email": email},
+                    {
+                        "$set": {
+                            "name": name if name else email.split('@')[0],
+                            "email": email,
+                            "supabase_id": str(auth_response.user.id),
+                            "created_at": datetime.now()
+                        }
+                    },
+                    upsert=True
+                )
+            
+            return {"message": "Signup successful", "user": {"email": email, "id": str(auth_response.user.id)}}, 200
+        else:
+            return {"error": "Signup failed"}, 400
+            
+    except Exception as e:
+        print(f"[SUPABASE SIGNUP ERROR] {e}")
+        return {"error": str(e)}, 400
+
+def login(email, password):
+    """Login user using Supabase Auth"""
+    if not supabase:
+        return {"error": "Supabase not connected"}, 500
+    
+    try:
+        # Sign in with Supabase
+        auth_response = supabase.auth.sign_in_with_password({
+            "email": email,
+            "password": password
+        })
+        
+        print(f"[SUPABASE LOGIN] Response: {auth_response}")
+        
+        if auth_response.user:
+            # Get user metadata from MongoDB
+            user_data = {"id": str(auth_response.user.id), "email": email}
+            if users_collection:
+                mongo_user = users_collection.find_one({"email": email})
+                if mongo_user:
+                    user_data["name"] = mongo_user.get("name", email.split('@')[0])
+                    user_data["is_admin"] = mongo_user.get("is_admin", False)
+                else:
+                    user_data["name"] = email.split('@')[0]
+                    user_data["is_admin"] = False
+            
+            return {"message": "Login successful", "user": user_data, "access_token": auth_response.session.access_token}, 200
+        else:
+            return {"error": "Invalid credentials"}, 401
+            
+    except Exception as e:
+        print(f"[SUPABASE LOGIN ERROR] {e}")
+        return {"error": str(e)}, 401
+
 @app.before_request
 def require_login():
-    allowed_endpoints = ['login', 'register', 'forgot_password', 'verify_otp', 'reset_password', 'static', 'api_send_otp', 'api_verify_otp', 'api_reset_password']
+    allowed_endpoints = ['login', 'register', 'static', 'api_analytics']
     if request.endpoint not in allowed_endpoints and 'user_id' not in session:
         # Don't flash in JSON APIs
         if request.path.startswith('/api/'):
@@ -145,40 +239,16 @@ def register():
                 flash('Please fill in all fields.', 'error')
                 return render_template('register.html')
             
-            if not users_collection:
-                flash('Database not connected.', 'error')
-                return render_template('register.html')
+            # Use Supabase Auth for signup
+            result, status_code = signup(email, password, name)
             
-            user = users_collection.find_one({"email": email})
-            
-            if user:
-                flash('Email already registered.', 'error')
-            else:
-                # Check if this is the first user - make them admin
-                user_count = users_collection.count_documents({})
-                is_first_user = user_count == 0
-                
-                hashed_password = generate_password_hash(password)
-                print(f"[REGISTER] Creating user: {email}, is_admin: {is_first_user}")
-                
-                if is_first_user:
-                    users_collection.insert_one({
-                        "name": name,
-                        "email": email,
-                        "password": hashed_password,
-                        "is_admin": True
-                    })
-                    flash('Registration successful! First user registered as admin.', 'success')
-                else:
-                    users_collection.insert_one({
-                        "name": name,
-                        "email": email,
-                        "password": hashed_password,
-                        "is_admin": False
-                    })
-                    flash('Registration successful! Please log in.', 'success')
-                
+            if status_code == 200:
+                flash('Registration successful! Please log in.', 'success')
                 return redirect(url_for('login'))
+            else:
+                error_msg = result.get('error', 'Registration failed')
+                print(f"[REGISTER ERROR] {error_msg}")
+                flash(error_msg, 'error')
         except Exception as e:
             print(f"[ERROR] Registration error: {e}")
             flash('Registration failed. Please try again.', 'error')
@@ -195,31 +265,31 @@ def login():
                 flash('Please fill in all fields.', 'error')
                 return render_template('login.html')
             
-            if not users_collection:
-                flash('Database not connected.', 'error')
-                return render_template('login.html')
-            
             print(f"[LOGIN] Attempting login for: {email}")
             
-            user = users_collection.find_one({"email": email})
+            # Use Supabase Auth for login
+            result, status_code = login(email, password)
             
-            if not user:
-                print(f"[LOGIN] User not found: {email}")
-                flash('User not found. Please register first.', 'error')
-                return render_template('login.html')
-            
-            if check_password_hash(user['password'], password):
-                session['user_id'] = str(user['_id'])
-                session['user_name'] = user['name']
-                session['is_admin'] = user.get('is_admin', False)
-                print(f"[LOGIN] Success: {email}, is_admin: {user.get('is_admin', False)}")
+            if status_code == 200:
+                user_data = result.get('user', {})
+                access_token = result.get('access_token')
+                
+                # Set session
+                session['user_id'] = user_data.get('id')
+                session['user_name'] = user_data.get('name', email.split('@')[0])
+                session['is_admin'] = user_data.get('is_admin', False)
+                session['access_token'] = access_token
+                
+                print(f"[LOGIN] Success: {email}, is_admin: {user_data.get('is_admin', False)}")
                 flash('Logged in successfully!', 'success')
-                if user.get('is_admin', False):
+                
+                if user_data.get('is_admin', False):
                     return redirect(url_for('admin_dashboard'))
                 return redirect(url_for('index'))
             else:
-                print(f"[LOGIN] Wrong password for: {email}")
-                flash('Invalid email or password.', 'error')
+                error_msg = result.get('error', 'Invalid credentials')
+                print(f"[LOGIN ERROR] {error_msg}")
+                flash(error_msg, 'error')
         except Exception as e:
             print(f"[ERROR] Login error: {e}")
             flash('Login failed. Please try again.', 'error')
@@ -228,128 +298,19 @@ def login():
 
 @app.route('/logout')
 def logout():
+    # Sign out from Supabase if access token exists
+    if supabase and session.get('access_token'):
+        try:
+            supabase.auth.sign_out()
+            print("[LOGOUT] Signed out from Supabase")
+        except Exception as e:
+            print(f"[LOGOUT ERROR] {e}")
+    
     session.clear()
     flash('You have been logged out.', 'success')
     return redirect(url_for('index'))
 
-@app.route('/forgot_password', methods=('GET', 'POST'))
-def forgot_password():
-    if request.method == 'POST':
-        email = request.form.get('email', '').lower().strip()
-        
-        if not users_collection:
-            flash('Database not connected.', 'error')
-            return render_template('forgot_password.html')
-        
-        user = users_collection.find_one({"email": email})
-        
-        if user:
-            # Generate 6-digit OTP
-            otp = f"{secrets.randbelow(1000000):06d}"
-            expiry_time = datetime.now() + timedelta(minutes=15)
-            
-            # Store OTP in database
-            users_collection.update_one(
-                {"_id": user['_id']},
-                {"$set": {"reset_token": otp, "reset_token_expiry": expiry_time}}
-            )
-            
-            try:
-                # Send OTP email
-                msg = Message(
-                    subject='Your Password Reset OTP - CivicFix',
-                    sender=('CivicFix Support', MAIL_USERNAME) if MAIL_USERNAME else None,
-                    recipients=[email],
-                    html=f"<h3>Hello {user['name']},</h3><p>Your password reset OTP is: <strong>{otp}</strong></p><p>This code will expire in 15 minutes.</p>"
-                )
-                mail.send(msg)
-                flash('An OTP has been sent to your email address.', 'success')
-            except Exception as e:
-                # Handle error securely, do not expose OTP
-                print(f"Error sending OTP email: {str(e)}")
-                flash('Failed to send OTP. Please contact support or check mail configuration.', 'error')
-            
-            # Store email in session to verify OTP
-            session['otp_email'] = email
-            return redirect(url_for('verify_otp'))
-        else:
-            # Don't reveal if email exists or not for security
-            flash('If that email address exists in our system, an OTP has been sent.', 'info')
-            # Store email in session to maintain the same flow and prevent enumeration
-            session['otp_email'] = email
-            return redirect(url_for('verify_otp'))
-        
-        return redirect(url_for('login'))
-    
-    return render_template('forgot_password.html')
-
-@app.route('/verify_otp', methods=('GET', 'POST'))
-def verify_otp():
-    email = session.get('otp_email')
-    if not email:
-        flash('Please request a new password reset.', 'error')
-        return redirect(url_for('forgot_password'))
-
-    if request.method == 'POST':
-        otp = request.form.get('otp', '')
-        
-        if not users_collection:
-            flash('Database not connected.', 'error')
-            return render_template('verify_otp.html', email=email)
-        
-        current_time = datetime.now()
-        user = users_collection.find_one({
-            "email": email,
-            "reset_token": otp,
-            "reset_token_expiry": {"$gt": current_time}
-        })
-        
-        if user:
-            session['reset_auth'] = True
-            flash('OTP verified successfully. You can now reset your password.', 'success')
-            return redirect(url_for('reset_password'))
-        else:
-            flash('Invalid or expired OTP.', 'error')
-    
-    return render_template('verify_otp.html', email=email)
-
-@app.route('/reset_password', methods=('GET', 'POST'))
-def reset_password():
-    if not session.get('reset_auth'):
-        flash('Unauthorized access. Please verify your OTP first.', 'error')
-        return redirect(url_for('login'))
-
-    email = session.get('otp_email')
-    
-    if request.method == 'POST':
-        password = request.form.get('password', '')
-        confirm_password = request.form.get('confirm_password', '')
-        
-        if password != confirm_password:
-            flash('Passwords do not match.', 'error')
-            return render_template('reset_password.html')
-        
-        if len(password) < 6:
-            flash('Password must be at least 6 characters long.', 'error')
-            return render_template('reset_password.html')
-        
-        if not users_collection:
-            flash('Database not connected.', 'error')
-            return render_template('reset_password.html')
-        
-        # Update password and clear reset token/session
-        users_collection.update_one(
-            {"email": email},
-            {"$set": {"password": generate_password_hash(password), "reset_token": None, "reset_token_expiry": None}}
-        )
-        
-        session.pop('reset_auth', None)
-        session.pop('otp_email', None)
-        
-        flash('Your password has been reset successfully. Please log in.', 'success')
-        return redirect(url_for('login'))
-    
-    return render_template('reset_password.html')
+# Password reset is handled by Supabase Auth - no custom routes needed
 
 # --- User Routes ---
 @app.route('/report', methods=('GET', 'POST'))
@@ -648,111 +609,7 @@ def delete_complaint(id):
     
     return redirect(url_for('admin_dashboard'))
 
-@app.route('/api/send-otp', methods=['POST'])
-def api_send_otp():
-    data = request.get_json()
-    if not data or not data.get('email'):
-        return jsonify({'error': 'Email is required'}), 400
-    
-    email = data['email'].lower().strip()
-    
-    if not users_collection:
-        return jsonify({'error': 'Database not connected'}), 500
-    
-    user = users_collection.find_one({"email": email})
-    
-    if user:
-        otp = f"{secrets.randbelow(1000000):06d}"
-        expiry_time = datetime.now() + timedelta(minutes=5)
-        
-        users_collection.update_one(
-            {"_id": user['_id']},
-            {"$set": {"reset_token": otp, "reset_token_expiry": expiry_time}}
-        )
-        
-        try:
-            msg = Message(
-                subject='Your Password Reset OTP - CivicFix',
-                sender=('CivicFix Support', MAIL_USERNAME) if MAIL_USERNAME else None,
-                recipients=[email],
-                html=f"<h3>Hello {user['name']},</h3><p>Your password reset OTP is: <strong>{otp}</strong></p><p>This code will expire in 5 minutes.</p>"
-            )
-            mail.send(msg)
-        except Exception as e:
-            # Handle securely without returning OTP in API response
-            print(f"Error sending API OTP email: {str(e)}")
-            return jsonify({'error': 'Failed to send OTP email.'}), 500
-            
-    return jsonify({'message': 'If that email address exists in our system, an OTP has been sent.'}), 200
-
-@app.route('/api/verify-otp', methods=['POST'])
-def api_verify_otp():
-    data = request.get_json()
-    if not data:
-        return jsonify({'error': 'Invalid JSON'}), 400
-    
-    email = data.get('email', '').lower().strip()
-    otp = data.get('otp')
-    
-    if not email or not otp:
-        return jsonify({'error': 'Email and OTP are required'}), 400
-    
-    if not users_collection:
-        return jsonify({'error': 'Database not connected'}), 500
-        
-    current_time = datetime.now()
-    user = users_collection.find_one({
-        "email": email,
-        "reset_token": otp,
-        "reset_token_expiry": {"$gt": current_time}
-    })
-    
-    if user:
-        # Generate a temporary auth token tied to the DB for resetting pass
-        reset_auth_token = secrets.token_hex(32)
-        expiry_time = datetime.now() + timedelta(minutes=15)
-        users_collection.update_one(
-            {"_id": user['_id']},
-            {"$set": {"reset_token": reset_auth_token, "reset_token_expiry": expiry_time}}
-        )
-        return jsonify({'message': 'OTP verified successfully.', 'reset_auth_token': reset_auth_token}), 200
-    
-    return jsonify({'error': 'Invalid or expired OTP'}), 401
-
-@app.route('/api/reset-password', methods=['POST'])
-def api_reset_password():
-    data = request.get_json()
-    if not data:
-        return jsonify({'error': 'Invalid JSON'}), 400
-        
-    email = data.get('email', '').lower().strip()
-    reset_auth_token = data.get('reset_auth_token')
-    new_password = data.get('new_password')
-    
-    if not all([email, reset_auth_token, new_password]):
-        return jsonify({'error': 'email, reset_auth_token, and new_password are required'}), 400
-    
-    if len(new_password) < 6:
-        return jsonify({'error': 'Password must be at least 6 characters long.'}), 400
-    
-    if not users_collection:
-        return jsonify({'error': 'Database not connected'}), 500
-        
-    current_time = datetime.now()
-    user = users_collection.find_one({
-        "email": email,
-        "reset_token": reset_auth_token,
-        "reset_token_expiry": {"$gt": current_time}
-    })
-                      
-    if user:
-        users_collection.update_one(
-            {"_id": user['_id']},
-            {"$set": {"password": generate_password_hash(new_password), "reset_token": None, "reset_token_expiry": None}}
-        )
-        return jsonify({'message': 'Password reset successfully.'}), 200
-        
-    return jsonify({'error': 'Unauthorized or expired token.'}), 401
+# API password reset is handled by Supabase Auth - no custom routes needed
 
 @app.route('/api/analytics')
 def analytics():
