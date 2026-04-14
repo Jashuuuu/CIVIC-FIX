@@ -139,55 +139,83 @@ def index():
 @app.route('/register', methods=('GET', 'POST'))
 def register():
     if request.method == 'POST':
-        name = request.form['name']
-        email = request.form['email']
-        password = request.form['password']
-        
-        conn = get_db_connection()
-        user = conn.execute('SELECT id FROM users WHERE email = ?', (email,)).fetchone()
-        
-        if user:
-            flash('Email already registered.', 'error')
-        else:
-            # Check if this is the first user - make them admin
-            existing_users = conn.execute('SELECT COUNT(*) as count FROM users').fetchone()
-            is_first_user = existing_users['count'] == 0
+        try:
+            name = request.form.get('name', '')
+            email = request.form.get('email', '').lower().strip()
+            password = request.form.get('password', '')
             
-            if is_first_user:
-                conn.execute('INSERT INTO users (name, email, password, is_admin) VALUES (?, ?, ?, ?)',
-                             (name, email, generate_password_hash(password), 1))
-                flash('Registration successful! First user registered as admin.', 'success')
+            if not name or not email or not password:
+                flash('Please fill in all fields.', 'error')
+                return render_template('register.html')
+            
+            conn = get_db_connection()
+            user = conn.execute('SELECT id FROM users WHERE email = ?', (email,)).fetchone()
+            
+            if user:
+                flash('Email already registered.', 'error')
             else:
-                conn.execute('INSERT INTO users (name, email, password) VALUES (?, ?, ?)',
-                             (name, email, generate_password_hash(password)))
-                flash('Registration successful! Please log in.', 'success')
-            
-            conn.commit()
+                # Check if this is the first user - make them admin
+                existing_users = conn.execute('SELECT COUNT(*) as count FROM users').fetchone()
+                is_first_user = existing_users['count'] == 0
+                
+                hashed_password = generate_password_hash(password)
+                print(f"[REGISTER] Creating user: {email}, is_admin: {is_first_user}")
+                
+                if is_first_user:
+                    conn.execute('INSERT INTO users (name, email, password, is_admin) VALUES (?, ?, ?, ?)',
+                                 (name, email, hashed_password, 1))
+                    flash('Registration successful! First user registered as admin.', 'success')
+                else:
+                    conn.execute('INSERT INTO users (name, email, password) VALUES (?, ?, ?)',
+                                 (name, email, hashed_password))
+                    flash('Registration successful! Please log in.', 'success')
+                
+                conn.commit()
+                conn.close()
+                return redirect(url_for('login'))
             conn.close()
-            return redirect(url_for('login'))
-        conn.close()
+        except Exception as e:
+            print(f"[ERROR] Registration error: {e}")
+            flash('Registration failed. Please try again.', 'error')
     return render_template('register.html')
 
 @app.route('/login', methods=('GET', 'POST'))
 def login():
     if request.method == 'POST':
-        email = request.form['email']
-        password = request.form['password']
-        
-        conn = get_db_connection()
-        user = conn.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone()
-        conn.close()
-        
-        if user and check_password_hash(user['password'], password):
-            session['user_id'] = user['id']
-            session['user_name'] = user['name']
-            session['is_admin'] = user['is_admin']
-            flash('Logged in successfully!', 'success')
-            if user['is_admin']:
-                return redirect(url_for('admin_dashboard'))
-            return redirect(url_for('index'))
-        else:
-            flash('Invalid email or password.', 'error')
+        try:
+            email = request.form.get('email', '').lower().strip()
+            password = request.form.get('password', '')
+            
+            if not email or not password:
+                flash('Please fill in all fields.', 'error')
+                return render_template('login.html')
+            
+            print(f"[LOGIN] Attempting login for: {email}")
+            
+            conn = get_db_connection()
+            user = conn.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone()
+            conn.close()
+            
+            if not user:
+                print(f"[LOGIN] User not found: {email}")
+                flash('User not found. Please register first.', 'error')
+                return render_template('login.html')
+            
+            if check_password_hash(user['password'], password):
+                session['user_id'] = user['id']
+                session['user_name'] = user['name']
+                session['is_admin'] = user['is_admin']
+                print(f"[LOGIN] Success: {email}, is_admin: {user['is_admin']}")
+                flash('Logged in successfully!', 'success')
+                if user['is_admin']:
+                    return redirect(url_for('admin_dashboard'))
+                return redirect(url_for('index'))
+            else:
+                print(f"[LOGIN] Wrong password for: {email}")
+                flash('Invalid email or password.', 'error')
+        except Exception as e:
+            print(f"[ERROR] Login error: {e}")
+            flash('Login failed. Please try again.', 'error')
 
     return render_template('login.html')
 
